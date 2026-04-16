@@ -99,9 +99,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p publish-repo/sing-box
-
           find publish-repo -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
+
+          mkdir -p publish-repo/sing-box
 
           cp -f ./out/geoip.dat publish-repo/
           cp -f ./out/geosite.dat publish-repo/
