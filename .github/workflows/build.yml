@@ -8,18 +8,25 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: publish-build-branch
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      GEOIP_URL: https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/geoip.dat
+      GEOSITE_URL: https://raw.githubusercontent.com/runetfreedom/russia-blocked-geosite/release/geosite.dat
+      PUBLISH_BRANCH: build
 
     steps:
-      - name: Set variables
-        shell: bash
-        run: |
-          echo "RELEASE_NAME=Released on $(date -u +%Y%m%d%H%M)" >> "$GITHUB_ENV"
-          echo "TAG_NAME=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_ENV"
-          echo "GEOIP_URL=https://raw.githubusercontent.com/runetfreedom/russia-blocked-geoip/release/geoip.dat" >> "$GITHUB_ENV"
-          echo "GEOSITE_URL=https://raw.githubusercontent.com/runetfreedom/russia-blocked-geosite/release/geosite.dat" >> "$GITHUB_ENV"
+      - name: Checkout fork repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Checkout geodat2srs
         uses: actions/checkout@v4
@@ -31,16 +38,22 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: ./geodat2srs/go.mod
+          cache: true
 
       - name: Download source dat files
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ./publish
-          curl -fsSL "$GEOIP_URL" -o ./publish/geoip.dat
-          curl -fsSL "$GEOIP_URL.sha256sum" -o ./publish/geoip.dat.sha256sum
-          curl -fsSL "$GEOSITE_URL" -o ./publish/geosite.dat
-          curl -fsSL "$GEOSITE_URL.sha256sum" -o ./publish/geosite.dat.sha256sum
+
+          mkdir -p ./out
+
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            "$GEOIP_URL" -o ./out/geoip.dat
+
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            "$GEOSITE_URL" -o ./out/geosite.dat
 
       - name: Build geodat2srs
         shell: bash
@@ -52,55 +65,73 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ./tmp/sing-box/rule-set-geoip
-          mkdir -p ./tmp/sing-box/rule-set-geosite
 
-          ./geodat2srs/geodat2srs geoip -i ./publish/geoip.dat -o ./tmp/sing-box/rule-set-geoip/
-          ./geodat2srs/geodat2srs geosite -i ./publish/geosite.dat -o ./tmp/sing-box/rule-set-geosite/
+          rm -rf ./tmp
+          mkdir -p ./tmp/rule-set-geoip ./tmp/rule-set-geosite ./out/sing-box
 
-      - name: Pack sing-box.zip
+          ./geodat2srs/geodat2srs geoip -i ./out/geoip.dat -o ./tmp/rule-set-geoip/
+          ./geodat2srs/geodat2srs geosite -i ./out/geosite.dat -o ./tmp/rule-set-geosite/
+
+          cp -f ./tmp/rule-set-geoip/*.srs ./out/sing-box/
+          cp -f ./tmp/rule-set-geosite/*.srs ./out/sing-box/
+
+      - name: Prepare publish repo for build branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          (
-            cd ./tmp/sing-box
-            zip -r ../../publish/sing-box.zip .
-          )
 
-      - name: Collect individual srs assets
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          if git ls-remote --exit-code --heads origin "${PUBLISH_BRANCH}" >/dev/null 2>&1; then
+            git clone --depth=1 --branch "${PUBLISH_BRANCH}" "${REPO_URL}" publish-repo
+          else
+            git clone --depth=1 "${REPO_URL}" publish-repo
+            cd publish-repo
+            git switch --orphan "${PUBLISH_BRANCH}"
+            find . -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
+            cd ..
+          fi
+
+      - name: Publish generated files to build branch
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ./publish/rule-set-geosite ./publish/rule-set-geoip
-          cp -f ./tmp/sing-box/rule-set-geosite/*.srs ./publish/rule-set-geosite/
-          cp -f ./tmp/sing-box/rule-set-geoip/*.srs ./publish/rule-set-geoip/
 
-      - name: Upload dat and zip assets
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          release_name: ${{ env.RELEASE_NAME }}
-          tag: ${{ env.TAG_NAME }}
-          file_glob: true
-          overwrite: true
-          file: ./publish/*.{dat,sha256sum,zip}
+          mkdir -p publish-repo/sing-box
 
-      - name: Upload geosite srs assets
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          release_name: ${{ env.RELEASE_NAME }}
-          tag: ${{ env.TAG_NAME }}
-          file_glob: true
-          overwrite: true
-          file: ./publish/rule-set-geosite/*.srs
+          find publish-repo -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
 
-      - name: Upload geoip srs assets
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          release_name: ${{ env.RELEASE_NAME }}
-          tag: ${{ env.TAG_NAME }}
-          file_glob: true
-          overwrite: true
-          file: ./publish/rule-set-geoip/*.srs
+          cp -f ./out/geoip.dat publish-repo/
+          cp -f ./out/geosite.dat publish-repo/
+          cp -f ./out/sing-box/*.srs publish-repo/sing-box/
+
+          cat > publish-repo/README.md <<'EOF'
+          Auto-generated artifacts branch.
+
+          Contents:
+          - geoip.dat
+          - geosite.dat
+          - sing-box/*.srs
+          EOF
+
+      - name: Commit and push if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd publish-repo
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+
+          git commit -m "Update build artifacts"
+          git push origin "${PUBLISH_BRANCH}"
