@@ -75,6 +75,46 @@ jobs:
           cp -f ./tmp/rule-set-geoip/*.srs ./out/sing-box/
           cp -f ./tmp/rule-set-geosite/*.srs ./out/sing-box/
 
+      - name: Apply sing-box overrides
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OVERRIDE_FILE="./sing-box.override.json"
+          if [[ ! -f "$OVERRIDE_FILE" ]]; then
+            echo "No override file found, skipping"
+            exit 0
+          fi
+
+          # Install sing-box for decompile/compile
+          SING_BOX_VERSION="1.11.0"
+          curl --fail --silent --show-error --location \
+            "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz" \
+            -o /tmp/sing-box.tar.gz
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          SING_BOX="/tmp/sing-box-${SING_BOX_VERSION}-linux-amd64/sing-box"
+
+          for key in $(jq -r 'keys[]' "$OVERRIDE_FILE"); do
+            SRS_FILE="./out/sing-box/${key}.srs"
+
+            if [[ ! -f "$SRS_FILE" ]]; then
+              echo "SKIP: ${key}.srs not found"
+              continue
+            fi
+
+            echo "PATCH: ${key}.srs"
+
+            # Decompile .srs -> .json
+            "$SING_BOX" rule-set decompile "$SRS_FILE" -o "/tmp/${key}.json"
+
+            # Merge: append override rules into the existing rule-set
+            OVERRIDE_RULES=$(jq -c --arg k "$key" '.[$k].rules' "$OVERRIDE_FILE")
+            jq --argjson extra "$OVERRIDE_RULES" '.rules += $extra' "/tmp/${key}.json" > "/tmp/${key}-merged.json"
+
+            # Compile back .json -> .srs
+            "$SING_BOX" rule-set compile "/tmp/${key}-merged.json" -o "$SRS_FILE"
+          done
+
       - name: Prepare publish repo for build branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
