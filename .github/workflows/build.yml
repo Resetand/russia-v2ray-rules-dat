@@ -115,6 +115,37 @@ jobs:
             "$SING_BOX" rule-set compile "/tmp/${key}-merged.json" -o "$SRS_FILE"
           done
 
+      - name: Generate combined geo rule-sets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SING_BOX="/tmp/sing-box-1.11.0-linux-amd64/sing-box"
+          SRS_DIR="./out/sing-box"
+
+          # Collect all suffixes from geosite-*.srs files
+          for geosite_file in "$SRS_DIR"/geosite-*.srs; do
+            [[ -f "$geosite_file" ]] || continue
+
+            suffix="${geosite_file##*/geosite-}"
+            suffix="${suffix%.srs}"
+
+            geoip_file="$SRS_DIR/geoip-${suffix}.srs"
+            [[ -f "$geoip_file" ]] || continue
+
+            echo "COMBINE: geosite-${suffix} + geoip-${suffix} -> geo-${suffix}"
+
+            "$SING_BOX" rule-set decompile "$geosite_file" -o "/tmp/geosite-${suffix}.json"
+            "$SING_BOX" rule-set decompile "$geoip_file" -o "/tmp/geoip-${suffix}.json"
+
+            # Merge rules arrays from both rule-sets
+            jq -s '{ version: .[0].version, rules: (.[0].rules + .[1].rules) }' \
+              "/tmp/geosite-${suffix}.json" "/tmp/geoip-${suffix}.json" \
+              > "/tmp/geo-${suffix}.json"
+
+            "$SING_BOX" rule-set compile "/tmp/geo-${suffix}.json" -o "$SRS_DIR/geo-${suffix}.srs"
+          done
+
       - name: Prepare publish repo for build branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
