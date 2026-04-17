@@ -83,16 +83,22 @@ jobs:
           set -euo pipefail
 
           REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          TIMESTAMP=$(date +%s)
+          echo "TIMESTAMP=${TIMESTAMP}" >> "$GITHUB_ENV"
+          echo "DATED_BRANCH=${PUBLISH_BRANCH}-${TIMESTAMP}" >> "$GITHUB_ENV"
 
           if git ls-remote --exit-code --heads origin "${PUBLISH_BRANCH}" >/dev/null 2>&1; then
-            git clone --depth=1 --branch "${PUBLISH_BRANCH}" "${REPO_URL}" publish-repo
+            git clone --branch "${PUBLISH_BRANCH}" "${REPO_URL}" publish-repo
           else
-            git clone --depth=1 "${REPO_URL}" publish-repo
+            git clone "${REPO_URL}" publish-repo
             cd publish-repo
             git switch --orphan "${PUBLISH_BRANCH}"
             find . -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
             cd ..
           fi
+
+          cd publish-repo
+          git checkout -b "${PUBLISH_BRANCH}-${TIMESTAMP}"
 
       - name: Publish generated files to build branch
         shell: bash
@@ -133,5 +139,12 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Update build artifacts"
+          git commit -m "Update build artifacts ${TIMESTAMP}"
+
+          # Push the dated branch
+          git push origin "${DATED_BRANCH}"
+
+          # Merge into the main build branch and push
+          git checkout "${PUBLISH_BRANCH}"
+          git merge --ff-only "${DATED_BRANCH}"
           git push origin "${PUBLISH_BRANCH}"
