@@ -1,1 +1,9 @@
-{}
+{
+  "geosite-github-copilot": {
+    "rules": [
+      {
+        "domain_suffix": ["githubstatus.com"]
+      }
+    ]
+  }
+}
