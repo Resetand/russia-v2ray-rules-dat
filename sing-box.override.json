@@ -5,5 +5,12 @@
         "domain_suffix": ["githubstatus.com"]
       }
     ]
+  },
+  "geosite-ru-blocked": {
+    "rules": [
+      {
+        "domain_suffix": ["hostinger.com"]
+      }
+    ]
   }
 }
